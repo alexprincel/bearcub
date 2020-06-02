@@ -2,6 +2,8 @@
 #include <string>
 #include <vector>
 #include <boost/graph/adjacency_list.hpp>
+#include <boost/thread/thread.hpp>
+#include <boost/thread/mutex.hpp>
 
 // sequence of rules (Pipeline)
 // - folder rules
@@ -35,6 +37,7 @@ class QuerySet {
 class Rule {
     public:
         virtual void ExecuteRule() = 0;
+        virtual bool IsReadyToExecute() = 0;
 };
 
 class TransformationRule : public Rule {
@@ -43,9 +46,9 @@ class TransformationRule : public Rule {
             std::cout << "Transformation Rule !";
         }
 
-        friend std::ostream& operator<<(std::ostream& os, TransformationRule& er) {
-            os << "Transformation rule !";
-            return os;
+        bool IsReadyToExecute() {
+            boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
+            return true;
         }
 };
 
@@ -55,9 +58,8 @@ class ExtractionRule : public Rule {
             std::cout << "Extraction rule !";
         }
 
-        friend std::ostream& operator<<(std::ostream& os, ExtractionRule& er) {
-            os << "Extraction rule !";
-            return os;
+        bool IsReadyToExecute() {
+            return true;
         }
 };
 
@@ -89,8 +91,21 @@ public:
     }
 
     void ExecuteRules() {
-        for(auto vd : boost::make_iterator_range(boost::vertices(rule_graph))) {
-            rule_graph[vd]->ExecuteRule();
+        // Pour l'instant, traverse dans n'importe quelle direction
+        // OBJECTIF : Partir des nodes du début et aller vers l'avant:
+        // PROBLÈMES À RÉGLER:
+        // - Plusieurs nodes doivent pouvoir s'exécuter en même temps (multithreading / parallel computing)
+        // - Plusieurs nodes nécessaires à un node (ne peut commencer tant que nodes d'avant ont terminé leur exécution)
+        //      Ajout d'une propriété sur chaque node pour indiquer leur état ?
+        // - Possible récurrence des relations
+        //      Check de récurrence et ignorer ?
+        
+        // for(auto vd : boost::make_iterator_range(boost::vertices(rule_graph))) {
+        //     rule_graph[vd]->ExecuteRule();
+        // }
+
+        for(auto rule : this->GetRootRules()) {
+            boost::thread child_thread{boost::bind(Rule::ExecuteRule, rule)};
         }
     }
 
@@ -106,7 +121,7 @@ public:
         for(auto in_less_vertex : GetRootRules()) {
             in_less_vertex->ExecuteRule();
         }
-        std::cout << "****************************************\n";
+        std::cout << "\n****************************************\n";
     }
 private:
     BiDirectedGraph rule_graph;
@@ -116,8 +131,20 @@ private:
 
 int main(int argc, char** argv) {
     Pipeline data_pipeline;
-    data_pipeline.AddRule(std::make_shared<TransformationRule>(), opt_uint(), opt_uint());
-    data_pipeline.AddRule(std::make_shared<ExtractionRule>(), opt_uint(), 0);
-    data_pipeline.PrintPipeline();
+
+    // End node
+    data_pipeline.AddRule(std::make_shared<ExtractionRule>(), opt_uint(), opt_uint());
+
+    // Middle node
+    data_pipeline.AddRule(std::make_shared<TransformationRule>(), opt_uint(), 0);
+    
+    // Beginning nodes
+    data_pipeline.AddRule(std::make_shared<TransformationRule>(), opt_uint(), 1);
+    data_pipeline.AddRule(std::make_shared<ExtractionRule>(), opt_uint(), 1);
+
+    data_pipeline.ExecuteRules();
+
+    //data_pipeline.PrintPipeline();
+    
     return 0;
 }
