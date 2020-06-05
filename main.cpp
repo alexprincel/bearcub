@@ -43,11 +43,12 @@ class Rule {
 class TransformationRule : public Rule {
     public:
         void ExecuteRule() {
-            std::cout << "Transformation Rule !";
+            boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
+            std::cout << "\nTransformation Rule !" << std::flush;
         }
 
         bool IsReadyToExecute() {
-            boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
+            
             return true;
         }
 };
@@ -55,7 +56,7 @@ class TransformationRule : public Rule {
 class ExtractionRule : public Rule {
     public:
         void ExecuteRule() {
-            std::cout << "Extraction rule !";
+            std::cout << "\nExtraction rule !" << std::flush;
         }
 
         bool IsReadyToExecute() {
@@ -63,13 +64,23 @@ class ExtractionRule : public Rule {
         }
 };
 
+
 // Store and manage data collection, transformation and output rules
 typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::bidirectionalS, std::shared_ptr<Rule>> BiDirectedGraph;
 typedef boost::optional<unsigned int> opt_uint;
+typedef std::shared_ptr<boost::thread> thread_ptr;
+typedef std::shared_ptr<Rule> rule_ptr;
+
+// bool ThreadHasFinished(thread_ptr t) {
+//     // std::cout << "\nChecking thread...";
+//     bool retval = t->timed_join(boost::posix_time::milliseconds(0));
+//     // if(retval) std::cout << "\nThread has finished";
+//     return retval;
+// }
 
 class Pipeline {
 public:
-    void AddRule(std::shared_ptr<Rule> new_rule, opt_uint input_rule_id, opt_uint output_rule_id) {
+    void AddRule(rule_ptr new_rule, opt_uint input_rule_id, opt_uint output_rule_id) {
         BiDirectedGraph::vertex_descriptor vd = boost::add_vertex(new_rule, rule_graph);
         if(input_rule_id) {
             boost::add_edge(*input_rule_id, vd, rule_graph);
@@ -79,8 +90,8 @@ public:
         }
     }
 
-    std::vector<std::shared_ptr<Rule>> GetRootRules() const {
-        std::vector<std::shared_ptr<Rule>> root_rules;
+    std::vector<rule_ptr> GetRootRules() const {
+        std::vector<rule_ptr> root_rules;
         for(auto vd : boost::make_iterator_range(boost::vertices(rule_graph))) {
             auto in_edges = boost::make_iterator_range(boost::in_edges(vd, rule_graph));
             if(in_edges.size() == 0) {
@@ -104,8 +115,31 @@ public:
         //     rule_graph[vd]->ExecuteRule();
         // }
 
+        std::vector<thread_ptr> thread_vec;
+        // std::cout << "\nNetwork has " << this->GetRootRules().size() << " root rules.";
         for(auto rule : this->GetRootRules()) {
-            boost::thread child_thread{boost::bind(Rule::ExecuteRule, rule)};
+            thread_ptr child_thread = std::make_shared<boost::thread>(&Rule::ExecuteRule, rule);
+            std::cout << "\nThread id " << child_thread->get_id() << " created !" << std::flush;
+            thread_vec.push_back(child_thread);
+        }
+
+        while(true) {
+            // std::cout << "\nThread iteration...";
+            // std::cout << "\nthread_vec.size() == " << thread_vec.size();
+            if(thread_vec.size() == 0) break;
+
+            thread_vec.erase(
+                std::remove_if(
+                    thread_vec.begin(), 
+                    thread_vec.end(), 
+                    [](thread_ptr thread) -> bool { 
+                        return thread->timed_join(boost::posix_time::milliseconds(0)) == 0; 
+                    }
+                ),
+                thread_vec.end()
+            );
+
+            boost::this_thread::sleep(boost::posix_time::milliseconds(100));
         }
     }
 
@@ -124,6 +158,8 @@ public:
         std::cout << "\n****************************************\n";
     }
 private:
+    
+
     BiDirectedGraph rule_graph;
 };
 
@@ -143,7 +179,7 @@ int main(int argc, char** argv) {
     data_pipeline.AddRule(std::make_shared<ExtractionRule>(), opt_uint(), 1);
 
     data_pipeline.ExecuteRules();
-
+    
     //data_pipeline.PrintPipeline();
     
     return 0;
