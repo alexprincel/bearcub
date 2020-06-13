@@ -5,11 +5,11 @@
 #include <boost/thread/thread.hpp>
 #include <boost/thread/mutex.hpp>
 
-// sequence of rules (Pipeline)
-// - folder rules
-// - file rules
-// - content rules
-// - meta rules
+// sequence of Tasks (Pipeline)
+// - folder Tasks
+// - file Tasks
+// - content Tasks
+// - meta Tasks
 // Queryset object
 // - List of files
 // - Data ? Stored in-mem
@@ -34,17 +34,17 @@ class QuerySet {
 };
 
 // Execute a set of extraction, transformation or output instructions on a query set
-class Rule {
+class Task {
     public:
-        virtual void ExecuteRule() = 0;
+        virtual void ExecuteTask() = 0;
         virtual bool IsReadyToExecute() = 0;
 };
 
-class TransformationRule : public Rule {
+class TransformationTask : public Task {
     public:
-        void ExecuteRule() {
+        void ExecuteTask() {
             boost::this_thread::sleep(boost::posix_time::milliseconds(1000));
-            std::cout << "\nTransformation Rule !" << std::flush;
+            std::cout << "\nTransformation Task !" << std::flush;
         }
 
         bool IsReadyToExecute() {
@@ -53,10 +53,10 @@ class TransformationRule : public Rule {
         }
 };
 
-class ExtractionRule : public Rule {
+class ExtractionTask : public Task {
     public:
-        void ExecuteRule() {
-            std::cout << "\nExtraction rule !" << std::flush;
+        void ExecuteTask() {
+            std::cout << "\nExtraction Task !" << std::flush;
         }
 
         bool IsReadyToExecute() {
@@ -65,43 +65,41 @@ class ExtractionRule : public Rule {
 };
 
 
-// Store and manage data collection, transformation and output rules
-typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::bidirectionalS, std::shared_ptr<Rule>> BiDirectedGraph;
-typedef boost::optional<unsigned int> opt_uint;
+// Store and manage data collection, transformation and output Tasks
 typedef std::shared_ptr<boost::thread> thread_ptr;
-typedef std::shared_ptr<Rule> rule_ptr;
+typedef std::shared_ptr<Task> task_ptr;
+typedef boost::adjacency_list<boost::vecS, boost::vecS, boost::bidirectionalS, task_ptr, thread_ptr> BiDirectedGraph;
+typedef boost::optional<unsigned int> opt_uint;
 
-// bool ThreadHasFinished(thread_ptr t) {
-//     // std::cout << "\nChecking thread...";
-//     bool retval = t->timed_join(boost::posix_time::milliseconds(0));
-//     // if(retval) std::cout << "\nThread has finished";
-//     return retval;
-// }
+bool ThreadHasFinished(std::pair<task_ptr, thread_ptr>& task_process_pair) {
+    bool retval = task_process_pair.second->timed_join(boost::posix_time::milliseconds(0));
+    return retval;
+}
 
 class Pipeline {
 public:
-    void AddRule(rule_ptr new_rule, opt_uint input_rule_id, opt_uint output_rule_id) {
-        BiDirectedGraph::vertex_descriptor vd = boost::add_vertex(new_rule, rule_graph);
-        if(input_rule_id) {
-            boost::add_edge(*input_rule_id, vd, rule_graph);
+    void AddTask(task_ptr new_Task, opt_uint input_Task_id, opt_uint output_Task_id) {
+        BiDirectedGraph::vertex_descriptor vd = boost::add_vertex(new_Task, task_graph);
+        if(input_Task_id) {
+            boost::add_edge(*input_Task_id, vd, task_graph);
         }
-        if(output_rule_id) {
-            boost::add_edge(vd, *output_rule_id, rule_graph);
+        if(output_Task_id) {
+            boost::add_edge(vd, *output_Task_id, task_graph);
         }
     }
 
-    std::vector<rule_ptr> GetRootRules() const {
-        std::vector<rule_ptr> root_rules;
-        for(auto vd : boost::make_iterator_range(boost::vertices(rule_graph))) {
-            auto in_edges = boost::make_iterator_range(boost::in_edges(vd, rule_graph));
+    std::vector<boost::graph_traits<BiDirectedGraph>::vertex_descriptor> GetRootTasks() const {
+        std::vector<boost::graph_traits<BiDirectedGraph>::vertex_descriptor> root_Tasks;
+        for(auto vd : boost::make_iterator_range(boost::vertices(task_graph))) {
+            auto in_edges = boost::make_iterator_range(boost::in_edges(vd, task_graph));
             if(in_edges.size() == 0) {
-                root_rules.push_back(rule_graph[vd]);
+                root_Tasks.push_back(vd);
             }
         }
-        return root_rules;
+        return root_Tasks;
     }
 
-    void ExecuteRules() {
+    void ExecuteTasks() {
         // Pour l'instant, traverse dans n'importe quelle direction
         // OBJECTIF : Partir des nodes du début et aller vers l'avant:
         // PROBLÈMES À RÉGLER:
@@ -111,32 +109,30 @@ public:
         // - Possible récurrence des relations
         //      Check de récurrence et ignorer ?
         
-        // for(auto vd : boost::make_iterator_range(boost::vertices(rule_graph))) {
-        //     rule_graph[vd]->ExecuteRule();
+        // for(auto vd : boost::make_iterator_range(boost::vertices(task_graph))) {
+        //     task_graph[vd]->ExecuteTask();
         // }
 
+        std::vector<std::pair<task_ptr, thread_ptr>> task_execution_list;
+
         std::vector<thread_ptr> thread_vec;
-        // std::cout << "\nNetwork has " << this->GetRootRules().size() << " root rules.";
-        for(auto rule : this->GetRootRules()) {
-            thread_ptr child_thread = std::make_shared<boost::thread>(&Rule::ExecuteRule, rule);
+        // std::cout << "\nNetwork has " << this->GetRootTasks().size() << " root Tasks.";
+        for(auto Task : this->GetRootTasks()) {
+            thread_ptr child_thread = std::make_shared<boost::thread>(&Task::ExecuteTask, task_graph[Task]);
             std::cout << "\nThread id " << child_thread->get_id() << " created !" << std::flush;
-            thread_vec.push_back(child_thread);
+            task_execution_list.push_back(std::make_pair(task_graph[Task], child_thread));
         }
 
         while(true) {
-            // std::cout << "\nThread iteration...";
-            // std::cout << "\nthread_vec.size() == " << thread_vec.size();
-            if(thread_vec.size() == 0) break;
+            if(task_execution_list.size() == 0) break;
 
-            thread_vec.erase(
+            task_execution_list.erase(
                 std::remove_if(
-                    thread_vec.begin(), 
-                    thread_vec.end(), 
-                    [](thread_ptr thread) -> bool { 
-                        return thread->timed_join(boost::posix_time::milliseconds(0)) == 0; 
-                    }
+                    task_execution_list.begin(),
+                    task_execution_list.end(),
+                    ThreadHasFinished
                 ),
-                thread_vec.end()
+                task_execution_list.end()
             );
 
             boost::this_thread::sleep(boost::posix_time::milliseconds(100));
@@ -145,22 +141,28 @@ public:
 
     void PrintPipeline() {
         std::cout << "****************************************\n";
-        std::cout << "Network has " << boost::num_vertices(rule_graph) 
-                << " vertices and " << boost::num_edges(rule_graph) << " edges\n";
+        std::cout << "Network has " << boost::num_vertices(task_graph) 
+                << " vertices and " << boost::num_edges(task_graph) << " edges\n";
         std::cout << "Vertex list:\n";
-        for(auto ed : boost::make_iterator_range(boost::edges(rule_graph))) {
-            /*std::cout << "(" << (*rule_graph[boost::source(ed, rule_graph)])
-                    << ", " << (*rule_graph[boost::target(ed, rule_graph)]) << ")\n";*/
+        for(auto ed : boost::make_iterator_range(boost::edges(task_graph))) {
+            /*std::cout << "(" << (*task_graph[boost::source(ed, task_graph)])
+                    << ", " << (*task_graph[boost::target(ed, task_graph)]) << ")\n";*/
         }
-        for(auto in_less_vertex : GetRootRules()) {
-            in_less_vertex->ExecuteRule();
+        for(auto in_less_vertex : GetRootTasks()) {
+            //in_less_vertex->ExecuteTask();
         }
         std::cout << "\n****************************************\n";
     }
 private:
-    
+    std::vector<task_ptr> GetNextTasks(BiDirectedGraph::vertex_descriptor vd) {
+        std::vector<task_ptr> task_list;
+        for(auto out_edge : boost::make_iterator_range(boost::out_edges(vd, task_graph))) {
+            task_list.push_back(task_graph[boost::target(out_edge, task_graph)]);
+        }
+        return task_list;
+    }
 
-    BiDirectedGraph rule_graph;
+    BiDirectedGraph task_graph;
 };
 
 
@@ -169,16 +171,16 @@ int main(int argc, char** argv) {
     Pipeline data_pipeline;
 
     // End node
-    data_pipeline.AddRule(std::make_shared<ExtractionRule>(), opt_uint(), opt_uint());
+    data_pipeline.AddTask(std::make_shared<ExtractionTask>(), opt_uint(), opt_uint());
 
     // Middle node
-    data_pipeline.AddRule(std::make_shared<TransformationRule>(), opt_uint(), 0);
+    data_pipeline.AddTask(std::make_shared<TransformationTask>(), opt_uint(), 0);
     
     // Beginning nodes
-    data_pipeline.AddRule(std::make_shared<TransformationRule>(), opt_uint(), 1);
-    data_pipeline.AddRule(std::make_shared<ExtractionRule>(), opt_uint(), 1);
+    data_pipeline.AddTask(std::make_shared<TransformationTask>(), opt_uint(), 1);
+    data_pipeline.AddTask(std::make_shared<ExtractionTask>(), opt_uint(), 1);
 
-    data_pipeline.ExecuteRules();
+    data_pipeline.ExecuteTasks();
     
     //data_pipeline.PrintPipeline();
     
